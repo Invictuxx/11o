@@ -1,0 +1,130 @@
+name: Run O11 OTT Streamer for 6 hours
+
+on:
+  workflow_dispatch:
+
+jobs:
+  o11:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+      - name: Clone O11 OTT Streamer
+        run: |
+          cd /home
+          git clone https://github.com/DRM-Scripts/o11-OTT-Streamer
+          cd /home/o11-OTT-Streamer
+
+      - name: Set permissions
+        run: |
+          cd /home/o11-OTT-Streamer
+          chmod 777 ./o11_streamer
+
+      - name: Start O11 OTT Streamer
+        run: |
+          cd /home/o11-OTT-Streamer
+
+          nohup ./o11_streamer > /home/o11-OTT-Streamer/o11.log 2>&1 &
+
+          echo $! > /home/o11-OTT-Streamer/o11.pid
+
+      - name: Wait for O11 dashboard
+        run: |
+          echo "Waiting for O11 OTT Streamer on port 123..."
+
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:123/ > /dev/null; then
+              echo "O11 OTT Streamer is running."
+              exit 0
+            fi
+
+            echo "Attempt $i/60..."
+            sleep 5
+          done
+
+          echo "O11 OTT Streamer failed to start."
+
+          echo "===== O11 LOG ====="
+          cat /home/o11-OTT-Streamer/o11.log || true
+
+          exit 1
+
+      - name: Start Cloudflare Tunnel
+        env:
+          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+            echo "ERROR: CLOUDFLARE_TUNNEL_TOKEN is not configured."
+            exit 1
+          fi
+
+          docker run -d \
+            --name cloudflared \
+            --network host \
+            cloudflare/cloudflared:latest \
+            tunnel --no-autoupdate run \
+            --token "$CLOUDFLARE_TUNNEL_TOKEN"
+
+      - name: Verify Cloudflare Tunnel
+        run: |
+          sleep 10
+
+          echo "===== CLOUDFLARED CONTAINER ====="
+          docker ps --filter name=cloudflared
+
+          echo
+          echo "===== CLOUDFLARED LOG ====="
+          docker logs cloudflared --tail 100
+
+      - name: Verify O11
+        run: |
+          echo "===== O11 DASHBOARD ====="
+          curl -I http://127.0.0.1:123/ || true
+
+          echo
+          echo "===== O11 PROCESS ====="
+          ps aux | grep '[o]11_streamer' || true
+
+      - name: Keep O11 running for 6 hours
+        run: |
+          echo "=========================================="
+          echo "O11 OTT STREAMER"
+          echo "=========================================="
+          echo "Local dashboard:"
+          echo "http://127.0.0.1:123"
+          echo
+          echo "Cloudflare Tunnel: RUNNING"
+          echo
+          echo "Keeping O11 running for 6 hours..."
+          echo "=========================================="
+
+          sleep 21600
+
+      - name: Show logs
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "O11 LOG"
+          echo "=========================================="
+
+          cat /home/o11-OTT-Streamer/o11.log || true
+
+          echo
+          echo "=========================================="
+          echo "CLOUDFLARED LOG"
+          echo "=========================================="
+
+          docker logs cloudflared --tail 500 || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f cloudflared 2>/dev/null || true
+
+          if [ -f /home/o11-OTT-Streamer/o11.pid ]; then
+            kill "$(cat /home/o11-OTT-Streamer/o11.pid)" 2>/dev/null || true
+          fi
