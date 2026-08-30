@@ -15,41 +15,60 @@ jobs:
 
       - name: Clone O11 OTT Streamer
         run: |
-          cd /home
-          git clone https://github.com/DRM-Scripts/o11-OTT-Streamer
-          cd /home/o11-OTT-Streamer
+          cd "$GITHUB_WORKSPACE"
+          git clone https://github.com/DRM-Scripts/o11-OTT-Streamer o11-OTT-Streamer
+
+          echo "Repository cloned:"
+          ls -la "$GITHUB_WORKSPACE/o11-OTT-Streamer"
 
       - name: Set permissions
+        working-directory: ${{ github.workspace }}/o11-OTT-Streamer
         run: |
-          cd /home/o11-OTT-Streamer
           chmod 777 ./o11_streamer
+          ls -lh ./o11_streamer
 
       - name: Start O11 OTT Streamer
+        working-directory: ${{ github.workspace }}/o11-OTT-Streamer
         run: |
-          cd /home/o11-OTT-Streamer
+          nohup ./o11_streamer > o11.log 2>&1 &
 
-          nohup ./o11_streamer > /home/o11-OTT-Streamer/o11.log 2>&1 &
+          echo $! > o11.pid
 
-          echo $! > /home/o11-OTT-Streamer/o11.pid
+          echo "O11 started with PID:"
+          cat o11.pid
 
       - name: Wait for O11 dashboard
         run: |
           echo "Waiting for O11 OTT Streamer on port 123..."
 
           for i in {1..60}; do
+
             if curl -fsS http://127.0.0.1:123/ > /dev/null; then
-              echo "O11 OTT Streamer is running."
+              echo
+              echo "========================================"
+              echo "O11 OTT Streamer is running!"
+              echo "========================================"
               exit 0
+            fi
+
+            if [ -f "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log" ]; then
+              echo "--- O11 log (last 20 lines) ---"
+              tail -20 "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log"
             fi
 
             echo "Attempt $i/60..."
             sleep 5
           done
 
-          echo "O11 OTT Streamer failed to start."
+          echo
+          echo "O11 failed to start."
 
           echo "===== O11 LOG ====="
-          cat /home/o11-OTT-Streamer/o11.log || true
+          cat "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log" || true
+
+          echo
+          echo "===== PROCESS ====="
+          ps aux | grep '[o]11_streamer' || true
 
           exit 1
 
@@ -80,26 +99,36 @@ jobs:
           echo "===== CLOUDFLARED LOG ====="
           docker logs cloudflared --tail 100
 
-      - name: Verify O11
+      - name: Final service check
         run: |
-          echo "===== O11 DASHBOARD ====="
+          echo "===== O11 ====="
+
           curl -I http://127.0.0.1:123/ || true
 
           echo
           echo "===== O11 PROCESS ====="
+
           ps aux | grep '[o]11_streamer' || true
+
+          echo
+          echo "===== CLOUDFLARED ====="
+
+          docker ps --filter name=cloudflared
 
       - name: Keep O11 running for 6 hours
         run: |
+          echo
           echo "=========================================="
-          echo "O11 OTT STREAMER"
+          echo "O11 OTT STREAMER IS RUNNING"
           echo "=========================================="
-          echo "Local dashboard:"
+          echo
+          echo "Local:"
           echo "http://127.0.0.1:123"
           echo
-          echo "Cloudflare Tunnel: RUNNING"
+          echo "Cloudflare Tunnel:"
+          echo "RUNNING"
           echo
-          echo "Keeping O11 running for 6 hours..."
+          echo "The service will remain running for 6 hours."
           echo "=========================================="
 
           sleep 21600
@@ -111,7 +140,7 @@ jobs:
           echo "O11 LOG"
           echo "=========================================="
 
-          cat /home/o11-OTT-Streamer/o11.log || true
+          cat "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log" || true
 
           echo
           echo "=========================================="
@@ -120,11 +149,24 @@ jobs:
 
           docker logs cloudflared --tail 500 || true
 
+          echo
+          echo "=========================================="
+          echo "PROCESSES"
+          echo "=========================================="
+
+          ps aux | grep -E '[o]11_streamer|[c]loudflared' || true
+
       - name: Cleanup
         if: always()
         run: |
+          echo "Stopping Cloudflare Tunnel..."
+
           docker rm -f cloudflared 2>/dev/null || true
 
-          if [ -f /home/o11-OTT-Streamer/o11.pid ]; then
-            kill "$(cat /home/o11-OTT-Streamer/o11.pid)" 2>/dev/null || true
+          echo "Stopping O11..."
+
+          if [ -f "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.pid" ]; then
+            kill "$(cat "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.pid")" 2>/dev/null || true
           fi
+
+          echo "Cleanup complete."
