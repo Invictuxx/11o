@@ -20,7 +20,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
           git clone \
-            https://github.com/DRM-Scripts/o11-OTT-Streamer \
+            https://github.com/DRMStuff/o11-OTT-v2.2b1 \
             o11-OTT-Streamer
 
           echo "Repository cloned:"
@@ -29,15 +29,15 @@ jobs:
       - name: Set permissions
         working-directory: ${{ github.workspace }}/o11-OTT-Streamer
         run: |
-          chmod 777 ./o11_streamer
+          chmod +x o11_v22b1-DRMStuff
 
           echo "Binary:"
-          ls -lh ./o11_streamer
+          ls -lh ./o11
 
       - name: Start O11 OTT Streamer
         working-directory: ${{ github.workspace }}/o11-OTT-Streamer
         run: |
-          nohup ./o11_streamer \
+          nohup ./o11 \
             > o11.log 2>&1 &
 
           echo $! > o11.pid
