@@ -1,3 +1,4 @@
+```yaml
 name: Run O11 OTT Streamer for 6 hours
 
 on:
@@ -14,6 +15,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          sudo apt-get install -y curl
 
       - name: Clone O11 OTT Streamer
         run: |
@@ -27,17 +29,20 @@ jobs:
           ls -la "$GITHUB_WORKSPACE/o11-OTT-v2.2b1"
 
       - name: Set permissions
-        working-directory: ${{ github.workspace }}/o11-OTT-Streamer
+        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
           chmod +x o11_v22b1-DRMStuff
 
           echo "Binary:"
           ls -lh o11_v22b1-DRMStuff
 
+          echo "File type:"
+          file o11_v22b1-DRMStuff
+
       - name: Start O11 OTT Streamer
-        working-directory: ${{ github.workspace }}/o11-OTT-Streamer
+        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
-          nohup o11_v22b1-DRMStuff \
+          nohup ./o11_v22b1-DRMStuff \
             > o11.log 2>&1 &
 
           echo $! > o11.pid
@@ -45,7 +50,13 @@ jobs:
           echo "O11 PID:"
           cat o11.pid
 
+          sleep 3
+
+          echo "===== INITIAL O11 LOG ====="
+          cat o11.log || true
+
       - name: Wait for O11 dashboard
+        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
           echo "Waiting for O11 OTT Streamer on port 1234..."
 
@@ -63,10 +74,9 @@ jobs:
               exit 0
             fi
 
-            if [ -f "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log" ]; then
+            if [ -f "o11.log" ]; then
               echo "--- O11 log ---"
-              tail -20 \
-                "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log"
+              tail -20 o11.log
             fi
 
             echo "Attempt $i/60..."
@@ -79,9 +89,7 @@ jobs:
           echo
           echo "===== O11 LOG ====="
 
-          cat \
-            "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log" \
-            || true
+          cat o11.log || true
 
           echo
           echo "===== LISTENING PORTS ====="
@@ -91,7 +99,7 @@ jobs:
           echo
           echo "===== PROCESS ====="
 
-          ps aux | grep '[o]11_streamer' || true
+          ps aux | grep '[o]11' || true
 
           exit 1
 
@@ -130,6 +138,7 @@ jobs:
             --tail 100
 
       - name: Final service check
+        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
           echo "===== O11 ====="
 
@@ -140,7 +149,7 @@ jobs:
           echo
           echo "===== O11 PROCESS ====="
 
-          ps aux | grep '[o]11_streamer' || true
+          ps aux | grep '[o]11' || true
 
           echo
           echo "===== PORT 1234 ====="
@@ -174,14 +183,13 @@ jobs:
 
       - name: Show logs
         if: always()
+        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
           echo "=========================================="
           echo "O11 LOG"
           echo "=========================================="
 
-          cat \
-            "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.log" \
-            || true
+          cat o11.log || true
 
           echo
           echo "=========================================="
@@ -199,11 +207,12 @@ jobs:
           echo "=========================================="
 
           ps aux | grep -E \
-            '[o]11_streamer|[c]loudflared' \
+            '[o]11|[c]loudflared' \
             || true
 
       - name: Cleanup
         if: always()
+        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
           echo "Stopping Cloudflare Tunnel..."
 
@@ -212,10 +221,11 @@ jobs:
 
           echo "Stopping O11..."
 
-          if [ -f "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.pid" ]; then
+          if [ -f "o11.pid" ]; then
             kill \
-              "$(cat "$GITHUB_WORKSPACE/o11-OTT-Streamer/o11.pid")" \
+              "$(cat o11.pid)" \
               2>/dev/null || true
           fi
 
           echo "Cleanup complete."
+```
