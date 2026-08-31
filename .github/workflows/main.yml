@@ -1,6 +1,8 @@
 name: Run O11 OTT Streamer for 6 hours
 
 on:
+  schedule:
+    - cron: "8 */6 * * *"
   workflow_dispatch:
 
 jobs:
