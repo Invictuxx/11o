@@ -29,7 +29,6 @@ jobs:
       - name: Set permissions
         working-directory: ${{ github.workspace }}/o11-OTT-Streamer
         run: |
-          cd o11-OTT-v2.2b1
           chmod +x o11_v22b1-DRMStuff
 
           echo "Binary:"
