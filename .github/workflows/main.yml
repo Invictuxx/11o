@@ -1,4 +1,3 @@
-```yaml
 name: Run O11 OTT Streamer for 6 hours
 
 on:
@@ -228,4 +227,3 @@ jobs:
           fi
 
           echo "Cleanup complete."
-```
