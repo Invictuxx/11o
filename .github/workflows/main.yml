@@ -32,12 +32,12 @@ jobs:
           chmod +x o11_v22b1-DRMStuff
 
           echo "Binary:"
-          ls -lh ./o11
+          ls -lh o11_v22b1-DRMStuff
 
       - name: Start O11 OTT Streamer
         working-directory: ${{ github.workspace }}/o11-OTT-Streamer
         run: |
-          nohup ./o11 \
+          nohup o11_v22b1-DRMStuff \
             > o11.log 2>&1 &
 
           echo $! > o11.pid
