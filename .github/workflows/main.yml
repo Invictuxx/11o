@@ -23,15 +23,16 @@ jobs:
     env:
       O11_DIR: /home/vpsuser/o11-OTT-v2.2b1
       O11_REPO: https://github.com/DRMStuff/o11-OTT-v2.2b1
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 
     steps:
 
       # ==================================================
-      # DEPENDENCIAS
+      # DEPENDENCIAS DEL SISTEMA
       # ==================================================
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update -qq
 
@@ -45,7 +46,68 @@ jobs:
             net-tools \
             tmux \
             ffmpeg \
-            file
+            file \
+            python3 \
+            python3-pip \
+            python3-venv \
+            python3-dev \
+            build-essential \
+            ca-certificates
+
+
+      # ==================================================
+      # DEPENDENCIAS PYTHON COMUNES
+      # ==================================================
+
+      - name: Install Python dependencies
+        run: |
+          echo "Installing Python dependencies..."
+
+          sudo python3 -m pip install \
+            --break-system-packages \
+            requests \
+            urllib3 \
+            dnspython \
+            requests-toolbelt \
+            beautifulsoup4 \
+            lxml \
+            pycryptodome \
+            cryptography \
+            m3u8 \
+            aiohttp \
+            httpx \
+            websocket-client \
+            PyYAML \
+            cloudscraper \
+            python-dateutil \
+            brotli \
+            xmltodict
+
+          echo
+          echo "Testing Python modules..."
+
+          python3 - <<'PY'
+          import requests
+          import urllib3
+          import dns.resolver
+          import requests_toolbelt
+          import bs4
+          import lxml
+          import cryptography
+          import m3u8
+          import aiohttp
+          import httpx
+          import websocket
+          import yaml
+          import cloudscraper
+          import dateutil
+          import brotli
+          import xmltodict
+
+          from Crypto.Cipher import AES
+
+          print("All common Python dependencies loaded successfully.")
+          PY
 
 
       # ==================================================
@@ -63,10 +125,12 @@ jobs:
           fi
 
           if ! id vpsuser >/dev/null 2>&1; then
+
             sudo useradd \
               -m \
               -s /bin/bash \
               vpsuser
+
           fi
 
           echo "vpsuser:$VPS_SSH_PASSWORD" \
@@ -105,13 +169,13 @@ jobs:
           sudo mkdir -p \
             /etc/ssh/sshd_config.d
 
-          sudo tee \
-            /etc/ssh/sshd_config.d/99-vps.conf \
-            >/dev/null <<'EOF'
-          PasswordAuthentication yes
-          PermitRootLogin no
-          UsePAM yes
-          EOF
+          printf '%s\n' \
+            'PasswordAuthentication yes' \
+            'PermitRootLogin no' \
+            'UsePAM yes' \
+            | sudo tee \
+              /etc/ssh/sshd_config.d/99-vps.conf \
+              >/dev/null
 
           sudo ssh-keygen -A
 
@@ -198,6 +262,9 @@ jobs:
             -m 755 \
             /tmp/bore-install/bore \
             /usr/local/bin/bore
+
+          echo
+          echo "Bore version:"
 
           bore --version
 
@@ -309,9 +376,13 @@ jobs:
             | base64 --decode \
             > "$WORK_DIR/o11-scripts.tar.gz"
 
+          echo "Checking archive..."
+
           tar \
             -tzf "$WORK_DIR/o11-scripts.tar.gz" \
             >/dev/null
+
+          echo "Extracting archive..."
 
           tar \
             -xzf "$WORK_DIR/o11-scripts.tar.gz" \
@@ -361,6 +432,89 @@ jobs:
 
 
       # ==================================================
+      # REQUIREMENTS PRIVADO
+      # ==================================================
+
+      - name: Install custom script requirements
+        run: |
+          REQUIREMENTS="$O11_DIR/scripts/requirements.txt"
+
+          if [ -f "$REQUIREMENTS" ]; then
+
+            echo "Custom requirements.txt found."
+            echo "Installing additional dependencies..."
+
+            sudo python3 -m pip install \
+              --break-system-packages \
+              -r "$REQUIREMENTS"
+
+          else
+
+            echo "No requirements.txt found."
+            echo "Using common dependencies only."
+
+          fi
+
+
+      # ==================================================
+      # VERIFICAR DEPENDENCIAS DE O11.PY
+      # ==================================================
+
+      - name: Verify O11 Python environment
+        run: |
+          echo "Python executable:"
+          which python3
+
+          echo
+          echo "Python version:"
+          python3 --version
+
+          echo
+          echo "Testing O11 modules..."
+
+          cd "$O11_DIR/scripts"
+
+          python3 - <<'PY'
+          import requests
+          import urllib3
+          import dns.resolver
+          import requests_toolbelt
+
+          print("requests:", requests.__version__)
+          print("urllib3:", urllib3.__version__)
+          print("dnspython: OK")
+          print("requests_toolbelt: OK")
+          print("O11 Python environment OK")
+          PY
+
+
+      # ==================================================
+      # COMPROBAR TODOS LOS SCRIPTS
+      # ==================================================
+
+      - name: Compile Python scripts
+        run: |
+          echo "Checking Python scripts..."
+
+          find "$O11_DIR/scripts" \
+            -type f \
+            -name "*.py" \
+            -print0 \
+            | while IFS= read -r -d '' SCRIPT; do
+
+                echo "Checking: $SCRIPT"
+
+                python3 \
+                  -m py_compile \
+                  "$SCRIPT"
+
+              done
+
+          echo
+          echo "All scripts compiled successfully."
+
+
+      # ==================================================
       # PERMISOS O11
       # ==================================================
 
@@ -372,6 +526,12 @@ jobs:
 
           sudo chmod +x \
             "$O11_DIR/o11_v22b1-DRMStuff"
+
+          sudo find \
+            "$O11_DIR/scripts" \
+            -type f \
+            -name "*.py" \
+            -exec chmod 700 {} \;
 
           echo
           echo "Binary:"
@@ -404,25 +564,24 @@ jobs:
             vpsuser:vpsuser \
             "$O11_DIR/hls"
 
-          # Por seguridad, desmontar un montaje anterior.
           if mountpoint -q "$O11_DIR/hls"; then
-            sudo umount "$O11_DIR/hls"
+
+            sudo umount \
+              "$O11_DIR/hls"
+
           fi
 
-          # Montar TODO hls/ en RAM.
           sudo mount \
             -t tmpfs \
             -o "size=2G,uid=${UID_VPS},gid=${GID_VPS},mode=0755" \
             tmpfs \
             "$O11_DIR/hls"
 
-          # Crear todas las carpetas que O11 necesita.
           sudo -u vpsuser \
             mkdir -p \
             "$O11_DIR/hls/live" \
             "$O11_DIR/hls/replay"
 
-          # Asegurar permisos.
           sudo chown \
             -R vpsuser:vpsuser \
             "$O11_DIR/hls"
@@ -528,11 +687,12 @@ jobs:
             echo "Attempt $i/60..."
 
             if [ -f "$O11_DIR/o11.log" ]; then
+
               tail -20 \
                 "$O11_DIR/o11.log"
+
             fi
 
-            # Si el proceso murió, no esperar 5 minutos.
             if [ -f "$O11_DIR/o11.pid" ]; then
 
               PID="$(cat "$O11_DIR/o11.pid")"
@@ -545,29 +705,17 @@ jobs:
                 echo
                 echo "===== O11 LOG ====="
 
-                cat "$O11_DIR/o11.log" || true
-
-                echo
-                echo "===== HLS PERMISSIONS ====="
-
-                ls -ld \
-                  "$O11_DIR/hls" \
-                  "$O11_DIR/hls/live" \
-                  "$O11_DIR/hls/replay" \
-                  || true
-
-                echo
-                echo "===== HLS FILESYSTEM ====="
-
-                df -hT \
-                  "$O11_DIR/hls" \
+                cat \
+                  "$O11_DIR/o11.log" \
                   || true
 
                 exit 1
               fi
+
             fi
 
             sleep 5
+
           done
 
           echo
@@ -704,19 +852,23 @@ jobs:
             || true
 
           echo
+          echo "===== BORE ====="
+
+          ps aux \
+            | grep '[b]ore' \
+            || true
+
+          echo
+          echo "===== CLOUDFLARE ====="
+
+          docker ps \
+            --filter name=cloudflared
+
+          echo
           echo "===== HLS TMPFS ====="
 
           df -hT \
             "$O11_DIR/hls" \
-            || true
-
-          echo
-          echo "===== HLS PERMISSIONS ====="
-
-          ls -ld \
-            "$O11_DIR/hls" \
-            "$O11_DIR/hls/live" \
-            "$O11_DIR/hls/replay" \
             || true
 
 
@@ -783,15 +935,22 @@ jobs:
 
           echo
           echo "============================================"
+          echo "PYTHON"
+          echo "============================================"
+
+          python3 --version \
+            || true
+
+          python3 -m pip list \
+            2>/dev/null \
+            || true
+
+          echo
+          echo "============================================"
           echo "HLS"
           echo "============================================"
 
           df -hT \
-            "$O11_DIR/hls" \
-            2>/dev/null \
-            || true
-
-          ls -la \
             "$O11_DIR/hls" \
             2>/dev/null \
             || true
