@@ -1,84 +1,460 @@
-name: Run O11 OTT Streamer for 6 hours
+name: O11 OTT + Private Scripts + SSH
 
 on:
   schedule:
     - cron: "8 */6 * * *"
+
   workflow_dispatch:
 
+
+concurrency:
+  group: o11-ott-server
+  cancel-in-progress: true
+
+
 jobs:
+
   o11:
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 360
 
+
+    env:
+      O11_DIR: /home/vpsuser/o11-OTT-v2.2b1
+      O11_REPO: https://github.com/DRMStuff/o11-OTT-v2.2b1
+
+
     steps:
+
+      # ==================================================
+      # DEPENDENCIAS
+      # ==================================================
+
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl
+          sudo apt-get update -qq
+
+          sudo apt-get install -y \
+            curl \
+            wget \
+            jq \
+            git \
+            rsync \
+            openssh-server \
+            net-tools \
+            tmux \
+            ffmpeg \
+            file
+
+
+      # ==================================================
+      # CREAR USUARIO
+      # ==================================================
+
+      - name: Create VPS user
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+
+        run: |
+          if [ -z "$VPS_SSH_PASSWORD" ]; then
+            echo "ERROR: VPS_SSH_PASSWORD is not configured."
+            exit 1
+          fi
+
+          if ! id vpsuser >/dev/null 2>&1; then
+            sudo useradd \
+              -m \
+              -s /bin/bash \
+              vpsuser
+          fi
+
+          echo "vpsuser:$VPS_SSH_PASSWORD" \
+            | sudo chpasswd
+
+          sudo usermod \
+            -aG sudo \
+            vpsuser
+
+          echo "vpsuser ALL=(ALL) NOPASSWD:ALL" \
+            | sudo tee \
+              /etc/sudoers.d/vpsuser \
+              >/dev/null
+
+          sudo chmod 440 \
+            /etc/sudoers.d/vpsuser
+
+          echo "User created."
+
+
+      # ==================================================
+      # CONFIGURAR SSH
+      # ==================================================
+
+      - name: Configure SSH
+        run: |
+          sudo mkdir -p \
+            /etc/ssh/sshd_config.d
+
+          sudo tee \
+            /etc/ssh/sshd_config.d/99-vps.conf \
+            >/dev/null <<'EOF'
+          PasswordAuthentication yes
+          PermitRootLogin no
+          UsePAM yes
+          EOF
+
+          sudo ssh-keygen -A
+
+          sudo sshd -t
+
+          sudo service ssh restart \
+            || sudo systemctl restart ssh
+
+          echo
+          echo "SSH listening:"
+          sudo ss -lntp \
+            | grep ':22' \
+            || true
+
+
+      # ==================================================
+      # INSTALAR BORE
+      # ==================================================
+
+      - name: Install Bore
+        run: |
+          echo "Finding latest Bore release..."
+
+          BORE_URL="$(
+            curl -fsSL \
+              https://api.github.com/repos/ekzhang/bore/releases/latest \
+            | jq -r '
+                .assets[]
+                | select(
+                    .name
+                    | endswith("x86_64-unknown-linux-musl.tar.gz")
+                  )
+                | .browser_download_url
+              ' \
+            | head -n 1
+          )"
+
+          if [ -z "$BORE_URL" ] \
+             || [ "$BORE_URL" = "null" ]; then
+            echo "ERROR: Bore binary not found."
+            exit 1
+          fi
+
+          echo "Downloading Bore..."
+
+          curl \
+            -fsSL \
+            "$BORE_URL" \
+            -o /tmp/bore.tar.gz
+
+          mkdir -p \
+            /tmp/bore-install
+
+          tar \
+            -xzf /tmp/bore.tar.gz \
+            -C /tmp/bore-install
+
+          sudo install \
+            -m 755 \
+            /tmp/bore-install/bore \
+            /usr/local/bin/bore
+
+          echo
+          bore --version
+
+
+      # ==================================================
+      # TÚNEL SSH
+      # ==================================================
+
+      - name: Start Bore SSH tunnel
+        run: |
+          echo "Starting SSH tunnel..."
+
+          nohup bore \
+            local 22 \
+            --to bore.pub \
+            > /tmp/bore.log \
+            2>&1 &
+
+          echo $! \
+            > /tmp/bore.pid
+
+          PORT=""
+
+          for i in $(seq 1 30); do
+
+            PORT="$(
+              grep -oE \
+                'bore\.pub:[0-9]+' \
+                /tmp/bore.log \
+              | tail -n 1 \
+              | cut -d: -f2
+            )"
+
+            if [ -n "$PORT" ]; then
+              break
+            fi
+
+            sleep 1
+          done
+
+          echo
+          echo "===== BORE LOG ====="
+          cat /tmp/bore.log || true
+
+          if [ -z "$PORT" ]; then
+            echo "ERROR: Could not obtain Bore port."
+            exit 1
+          fi
+
+          echo "$PORT" \
+            > /tmp/bore.port
+
+          echo
+          echo "============================================"
+          echo "SSH READY"
+          echo "============================================"
+          echo
+          echo "Host:"
+          echo "bore.pub"
+          echo
+          echo "Port:"
+          echo "$PORT"
+          echo
+          echo "User:"
+          echo "vpsuser"
+          echo
+          echo "Command:"
+          echo
+          echo "ssh vpsuser@bore.pub -p $PORT"
+          echo
+          echo "Password:"
+          echo "VPS_SSH_PASSWORD secret"
+          echo
+          echo "============================================"
+
+
+      # ==================================================
+      # CLONAR O11
+      # ==================================================
 
       - name: Clone O11 OTT Streamer
         run: |
-          cd "$GITHUB_WORKSPACE"
+          echo "Cloning O11..."
 
-          git clone \
-            https://github.com/DRMStuff/o11-OTT-v2.2b1 \
-            o11-OTT-v2.2b1
+          sudo rm -rf \
+            "$O11_DIR"
 
-          echo "Repository cloned:"
-          ls -la "$GITHUB_WORKSPACE/o11-OTT-v2.2b1"
+          sudo -u vpsuser \
+            git clone \
+              "$O11_REPO" \
+              "$O11_DIR"
 
-      - name: Set permissions
-        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
+          echo
+          echo "Repository:"
+          sudo -u vpsuser \
+            ls -la \
+            "$O11_DIR"
+
+
+      # ==================================================
+      # RESTAURAR SCRIPTS PRIVADOS
+      # ==================================================
+
+      - name: Install private O11 scripts
+        env:
+          O11_SCRIPTS_B64: ${{ secrets.O11_SCRIPTS_B64 }}
+
         run: |
-          chmod +x o11_v22b1-DRMStuff
+          if [ -z "$O11_SCRIPTS_B64" ]; then
+            echo "ERROR: O11_SCRIPTS_B64 is not configured."
+            exit 1
+          fi
 
+          echo "Installing private scripts..."
+
+          WORK_DIR="$(mktemp -d)"
+
+          printf '%s' "$O11_SCRIPTS_B64" \
+            | base64 --decode \
+            > "$WORK_DIR/o11-scripts.tar.gz"
+
+          echo "Testing archive..."
+
+          tar \
+            -tzf "$WORK_DIR/o11-scripts.tar.gz" \
+            >/dev/null
+
+          echo "Extracting archive..."
+
+          tar \
+            -xzf "$WORK_DIR/o11-scripts.tar.gz" \
+            -C "$WORK_DIR"
+
+          if [ ! -d "$WORK_DIR/scripts" ]; then
+            echo "ERROR: scripts directory not found."
+            rm -rf "$WORK_DIR"
+            exit 1
+          fi
+
+          sudo mkdir -p \
+            "$O11_DIR/scripts"
+
+          sudo rsync \
+            -a \
+            --delete \
+            "$WORK_DIR/scripts/" \
+            "$O11_DIR/scripts/"
+
+          sudo chown \
+            -R vpsuser:vpsuser \
+            "$O11_DIR/scripts"
+
+          sudo find \
+            "$O11_DIR/scripts" \
+            -type f \
+            -name "*.py" \
+            -exec chmod 700 {} \;
+
+          rm -rf "$WORK_DIR"
+
+          echo
+          echo "============================================"
+          echo "PRIVATE SCRIPTS INSTALLED"
+          echo "============================================"
+
+          sudo -u vpsuser \
+            find \
+              "$O11_DIR/scripts" \
+              -maxdepth 2 \
+              -type f \
+              -printf '%P\n' \
+            | sort
+
+
+      # ==================================================
+      # PERMISOS O11
+      # ==================================================
+
+      - name: Set O11 permissions
+        run: |
+          sudo chown \
+            -R vpsuser:vpsuser \
+            "$O11_DIR"
+
+          sudo chmod +x \
+            "$O11_DIR/o11_v22b1-DRMStuff"
+
+          echo
           echo "Binary:"
-          ls -lh o11_v22b1-DRMStuff
+          ls -lh \
+            "$O11_DIR/o11_v22b1-DRMStuff"
 
+          echo
           echo "File type:"
-          file o11_v22b1-DRMStuff
+          file \
+            "$O11_DIR/o11_v22b1-DRMStuff"
+
+
+      # ==================================================
+      # PREPARAR TMPFS PARA HLS
+      # ==================================================
+
+      - name: Prepare HLS RAM filesystem
+        run: |
+          sudo mkdir -p \
+            "$O11_DIR/hls/live"
+
+          sudo chown \
+            vpsuser:vpsuser \
+            "$O11_DIR/hls/live"
+
+          if ! mountpoint -q \
+            "$O11_DIR/hls/live"; then
+
+            sudo mount \
+              -t tmpfs \
+              -o size=2G,uid=$(id -u vpsuser),gid=$(id -g vpsuser),mode=0755 \
+              tmpfs \
+              "$O11_DIR/hls/live"
+          fi
+
+          echo
+          echo "HLS filesystem:"
+          df -hT \
+            "$O11_DIR/hls/live"
+
+
+      # ==================================================
+      # INICIAR O11
+      # ==================================================
 
       - name: Start O11 OTT Streamer
-        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
-          nohup ./o11_v22b1-DRMStuff \
-            > o11.log 2>&1 &
+          sudo -u vpsuser \
+            bash -c "
+              cd '$O11_DIR'
 
-          echo $! > o11.pid
+              nohup ./o11_v22b1-DRMStuff \
+                > o11.log \
+                2>&1 &
 
+              echo \$! > o11.pid
+            "
+
+          echo
           echo "O11 PID:"
-          cat o11.pid
+          cat \
+            "$O11_DIR/o11.pid"
 
           sleep 3
 
+          echo
           echo "===== INITIAL O11 LOG ====="
-          cat o11.log || true
+          cat \
+            "$O11_DIR/o11.log" \
+            || true
+
+
+      # ==================================================
+      # ESPERAR O11
+      # ==================================================
 
       - name: Wait for O11 dashboard
-        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
         run: |
-          echo "Waiting for O11 OTT Streamer on port 1234..."
+          echo "Waiting for O11 on port 1234..."
 
-          for i in {1..60}; do
+          for i in $(seq 1 60); do
 
-            if curl -fsS \
+            if curl \
+              -fsS \
               http://127.0.0.1:1234/ \
-              > /dev/null; then
+              >/dev/null; then
 
               echo
-              echo "========================================"
-              echo "O11 OTT Streamer is running!"
-              echo "========================================"
+              echo "============================================"
+              echo "O11 IS RUNNING"
+              echo "============================================"
 
               exit 0
             fi
 
-            if [ -f "o11.log" ]; then
-              echo "--- O11 log ---"
-              tail -20 o11.log
+            echo
+            echo "Attempt $i/60..."
+
+            if [ -f "$O11_DIR/o11.log" ]; then
+              tail -20 \
+                "$O11_DIR/o11.log"
             fi
 
-            echo "Attempt $i/60..."
             sleep 5
           done
 
@@ -88,30 +464,48 @@ jobs:
           echo
           echo "===== O11 LOG ====="
 
-          cat o11.log || true
+          cat \
+            "$O11_DIR/o11.log" \
+            || true
 
           echo
-          echo "===== LISTENING PORTS ====="
+          echo "===== PORTS ====="
 
-          ss -lntp || true
+          sudo ss \
+            -lntp \
+            || true
 
           echo
           echo "===== PROCESS ====="
 
-          ps aux | grep '[o]11' || true
+          ps aux \
+            | grep '[o]11' \
+            || true
 
           exit 1
+
+
+      # ==================================================
+      # CLOUDFLARE TUNNEL
+      # ==================================================
 
       - name: Start Cloudflare Tunnel
         env:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+
         run: |
           if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
             echo "ERROR: CLOUDFLARE_TUNNEL_TOKEN is not configured."
             exit 1
           fi
 
-          docker run -d \
+          docker rm \
+            -f cloudflared \
+            2>/dev/null \
+            || true
+
+          docker run \
+            -d \
             --name cloudflared \
             --network host \
             cloudflare/cloudflared:latest \
@@ -120,11 +514,17 @@ jobs:
             run \
             --token "$CLOUDFLARE_TUNNEL_TOKEN"
 
+
+      # ==================================================
+      # VERIFICAR CLOUDFLARE
+      # ==================================================
+
       - name: Verify Cloudflare Tunnel
         run: |
           sleep 10
 
-          echo "===== CLOUDFLARED CONTAINER ====="
+          echo
+          echo "===== CLOUDFLARED ====="
 
           docker ps \
             --filter name=cloudflared
@@ -136,24 +536,92 @@ jobs:
             cloudflared \
             --tail 100
 
-      - name: Final service check
-        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
-        run: |
-          echo "===== O11 ====="
 
-          curl -I \
+      # ==================================================
+      # INFORMACIÓN DE ACCESO
+      # ==================================================
+
+      - name: Show access information
+        run: |
+          PORT="$(cat /tmp/bore.port)"
+
+          echo
+          echo "============================================"
+          echo "O11 SERVER READY"
+          echo "============================================"
+          echo
+          echo "SSH command:"
+          echo
+          echo "ssh vpsuser@bore.pub -p $PORT"
+          echo
+          echo "SSH user:"
+          echo "vpsuser"
+          echo
+          echo "SSH password:"
+          echo "Value configured in VPS_SSH_PASSWORD"
+          echo
+          echo "O11 local dashboard:"
+          echo
+          echo "http://127.0.0.1:1234"
+          echo
+          echo "O11 directory:"
+          echo
+          echo "$O11_DIR"
+          echo
+          echo "Private scripts:"
+          echo
+          echo "$O11_DIR/scripts"
+          echo
+          echo "Cloudflare:"
+          echo
+          echo "RUNNING"
+          echo
+          echo "============================================"
+
+
+      # ==================================================
+      # COMPROBACIÓN FINAL
+      # ==================================================
+
+      - name: Final service check
+        run: |
+          echo
+          echo "===== O11 HTTP ====="
+
+          curl \
+            -I \
             http://127.0.0.1:1234/ \
             || true
 
           echo
           echo "===== O11 PROCESS ====="
 
-          ps aux | grep '[o]11' || true
+          ps aux \
+            | grep '[o]11' \
+            || true
 
           echo
           echo "===== PORT 1234 ====="
 
-          ss -lntp | grep ':1234' || true
+          sudo ss \
+            -lntp \
+            | grep ':1234' \
+            || true
+
+          echo
+          echo "===== SSH PORT ====="
+
+          sudo ss \
+            -lntp \
+            | grep ':22' \
+            || true
+
+          echo
+          echo "===== BORE ====="
+
+          ps aux \
+            | grep '[b]ore' \
+            || true
 
           echo
           echo "===== CLOUDFLARED ====="
@@ -161,69 +629,141 @@ jobs:
           docker ps \
             --filter name=cloudflared
 
-      - name: Keep O11 running for 6 hours
-        run: |
           echo
-          echo "=========================================="
-          echo "O11 OTT STREAMER IS RUNNING"
-          echo "=========================================="
-          echo
-          echo "Local dashboard:"
-          echo "http://127.0.0.1:1234"
-          echo
-          echo "Cloudflare Tunnel:"
-          echo "RUNNING"
-          echo
-          echo "Keeping everything alive for 6 hours..."
-          echo
-          echo "=========================================="
+          echo "===== RAMFS ====="
 
-          sleep 21600
+          df -hT \
+            "$O11_DIR/hls/live" \
+            || true
+
+
+      # ==================================================
+      # KEEP ALIVE
+      # ==================================================
+
+      - name: Keep server alive
+        run: |
+          PORT="$(cat /tmp/bore.port)"
+
+          echo
+          echo "============================================"
+          echo "SERVER RUNNING"
+          echo "============================================"
+          echo
+          echo "SSH:"
+          echo
+          echo "ssh vpsuser@bore.pub -p $PORT"
+          echo
+          echo "O11:"
+          echo
+          echo "$O11_DIR"
+          echo
+          echo "Scripts:"
+          echo
+          echo "$O11_DIR/scripts"
+          echo
+          echo "============================================"
+
+          # 5 horas 45 minutos.
+          # Deja margen al job para instalación y cleanup.
+
+          sleep 20700
+
+
+      # ==================================================
+      # LOGS
+      # ==================================================
 
       - name: Show logs
         if: always()
-        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
-        run: |
-          echo "=========================================="
-          echo "O11 LOG"
-          echo "=========================================="
 
-          cat o11.log || true
+        run: |
+          echo
+          echo "============================================"
+          echo "O11 LOG"
+          echo "============================================"
+
+          cat \
+            "$O11_DIR/o11.log" \
+            2>/dev/null \
+            || true
 
           echo
-          echo "=========================================="
+          echo "============================================"
+          echo "BORE LOG"
+          echo "============================================"
+
+          cat \
+            /tmp/bore.log \
+            2>/dev/null \
+            || true
+
+          echo
+          echo "============================================"
           echo "CLOUDFLARED LOG"
-          echo "=========================================="
+          echo "============================================"
 
           docker logs \
             cloudflared \
             --tail 500 \
+            2>/dev/null \
             || true
 
           echo
-          echo "=========================================="
+          echo "============================================"
           echo "PROCESSES"
-          echo "=========================================="
+          echo "============================================"
 
-          ps aux | grep -E \
-            '[o]11|[c]loudflared' \
+          ps aux \
+            | grep -E \
+              '[o]11|[c]loudflared|[b]ore' \
             || true
+
+
+      # ==================================================
+      # CLEANUP
+      # ==================================================
 
       - name: Cleanup
         if: always()
-        working-directory: ${{ github.workspace }}/o11-OTT-v2.2b1
-        run: |
-          echo "Stopping Cloudflare Tunnel..."
 
-          docker rm -f cloudflared \
-            2>/dev/null || true
+        run: |
+          echo "Stopping Cloudflare..."
+
+          docker rm \
+            -f cloudflared \
+            2>/dev/null \
+            || true
+
+          echo "Stopping Bore..."
+
+          if [ -f /tmp/bore.pid ]; then
+            sudo kill \
+              "$(cat /tmp/bore.pid)" \
+              2>/dev/null \
+              || true
+          fi
 
           echo "Stopping O11..."
 
-          if [ -f "o11.pid" ]; then
-            kill \
-              "$(cat o11.pid)" \
-              2>/dev/null || true
+          if [ -f "$O11_DIR/o11.pid" ]; then
+            sudo kill \
+              "$(cat "$O11_DIR/o11.pid")" \
+              2>/dev/null \
+              || true
+          fi
+
+          sleep 2
+
+          echo "Unmounting HLS tmpfs..."
+
+          if mountpoint -q \
+            "$O11_DIR/hls/live" \
+            2>/dev/null; then
+
+            sudo umount \
+              "$O11_DIR/hls/live" \
+              || true
           fi
 
           echo "Cleanup complete."
