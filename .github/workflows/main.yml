@@ -19,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
-
     env:
       O11_DIR: /home/vpsuser/o11-OTT-v2.2b1
       O11_REPO: https://github.com/DRMStuff/o11-OTT-v2.2b1
@@ -52,62 +51,10 @@ jobs:
             python3-venv \
             python3-dev \
             build-essential \
-            ca-certificates
-
-
-      # ==================================================
-      # DEPENDENCIAS PYTHON COMUNES
-      # ==================================================
-
-      - name: Install Python dependencies
-        run: |
-          echo "Installing Python dependencies..."
-
-          sudo python3 -m pip install \
-            --break-system-packages \
-            requests \
-            urllib3 \
-            dnspython \
-            requests-toolbelt \
-            beautifulsoup4 \
-            lxml \
-            pycryptodome \
-            cryptography \
-            m3u8 \
-            aiohttp \
-            httpx \
-            websocket-client \
-            PyYAML \
-            cloudscraper \
-            python-dateutil \
-            brotli \
-            xmltodict
-
-          echo
-          echo "Testing Python modules..."
-
-          python3 - <<'PY'
-          import requests
-          import urllib3
-          import dns.resolver
-          import requests_toolbelt
-          import bs4
-          import lxml
-          import cryptography
-          import m3u8
-          import aiohttp
-          import httpx
-          import websocket
-          import yaml
-          import cloudscraper
-          import dateutil
-          import brotli
-          import xmltodict
-
-          from Crypto.Cipher import AES
-
-          print("All common Python dependencies loaded successfully.")
-          PY
+            ca-certificates \
+            libffi-dev \
+            libssl-dev \
+            zlib1g-dev
 
 
       # ==================================================
@@ -125,12 +72,10 @@ jobs:
           fi
 
           if ! id vpsuser >/dev/null 2>&1; then
-
             sudo useradd \
               -m \
               -s /bin/bash \
               vpsuser
-
           fi
 
           echo "vpsuser:$VPS_SSH_PASSWORD" \
@@ -149,6 +94,108 @@ jobs:
             /etc/sudoers.d/vpsuser
 
           echo "User created."
+
+
+      # ==================================================
+      # INSTALAR DEPENDENCIAS PYTHON COMO VPSUSER
+      # ==================================================
+
+      - name: Install Python dependencies
+        run: |
+          echo "Installing Python dependencies for vpsuser..."
+
+          sudo -H -u vpsuser \
+            python3 -m pip install \
+            --user \
+            --break-system-packages \
+            --ignore-installed \
+            requests \
+            urllib3 \
+            dnspython \
+            requests-toolbelt \
+            beautifulsoup4 \
+            lxml \
+            pycryptodome \
+            cryptography \
+            m3u8 \
+            aiohttp \
+            httpx \
+            websocket-client \
+            PyYAML \
+            cloudscraper \
+            python-dateutil \
+            brotli \
+            xmltodict \
+            certifi \
+            charset-normalizer \
+            idna
+
+          echo
+          echo "===== PYTHON USER SITE ====="
+
+          sudo -H -u vpsuser \
+            python3 -m site
+
+          echo
+          echo "===== INSTALLED PACKAGES ====="
+
+          sudo -H -u vpsuser \
+            python3 -m pip list \
+            --user
+
+
+      # ==================================================
+      # PROBAR DEPENDENCIAS
+      # ==================================================
+
+      - name: Test Python dependencies
+        run: |
+          echo "Testing Python modules as vpsuser..."
+
+          sudo -H -u vpsuser \
+            python3 - <<'PY'
+          import requests
+          import urllib3
+
+          import dns
+          import dns.resolver
+
+          import requests_toolbelt
+          import bs4
+          import lxml
+
+          from Crypto.Cipher import AES
+
+          import cryptography
+          import m3u8
+          import aiohttp
+          import httpx
+          import websocket
+          import yaml
+          import cloudscraper
+          import dateutil
+          import brotli
+          import xmltodict
+
+          print("")
+          print("========================================")
+          print("PYTHON DEPENDENCIES OK")
+          print("========================================")
+          print("requests:", requests.__version__)
+          print("urllib3:", urllib3.__version__)
+          print("dnspython:", dns.__version__)
+          print("requests-toolbelt: OK")
+          print("beautifulsoup4: OK")
+          print("lxml: OK")
+          print("pycryptodome: OK")
+          print("cryptography: OK")
+          print("m3u8: OK")
+          print("aiohttp: OK")
+          print("httpx: OK")
+          print("websocket-client: OK")
+          print("cloudscraper: OK")
+          print("========================================")
+          PY
 
 
       # ==================================================
@@ -190,14 +237,7 @@ jobs:
           sleep 2
 
           echo
-          echo "===== SSH PROCESS ====="
-
-          ps aux \
-            | grep '[s]shd' \
-            || true
-
-          echo
-          echo "===== SSH PORT ====="
+          echo "===== SSH ====="
 
           sudo ss \
             -lntp \
@@ -263,14 +303,11 @@ jobs:
             /tmp/bore-install/bore \
             /usr/local/bin/bore
 
-          echo
-          echo "Bore version:"
-
           bore --version
 
 
       # ==================================================
-      # INICIAR BORE SSH
+      # INICIAR BORE
       # ==================================================
 
       - name: Start Bore SSH tunnel
@@ -339,7 +376,7 @@ jobs:
           sudo rm -rf \
             "$O11_DIR"
 
-          sudo -u vpsuser \
+          sudo -H -u vpsuser \
             git clone \
               "$O11_REPO" \
               "$O11_DIR"
@@ -347,13 +384,13 @@ jobs:
           echo
           echo "Repository:"
 
-          sudo -u vpsuser \
+          sudo -H -u vpsuser \
             ls -la \
             "$O11_DIR"
 
 
       # ==================================================
-      # RESTAURAR SCRIPTS PRIVADOS
+      # INSTALAR SCRIPTS PRIVADOS
       # ==================================================
 
       - name: Install private O11 scripts
@@ -422,7 +459,7 @@ jobs:
           echo
           echo "===== PRIVATE SCRIPTS ====="
 
-          sudo -u vpsuser \
+          sudo -H -u vpsuser \
             find \
               "$O11_DIR/scripts" \
               -maxdepth 2 \
@@ -432,90 +469,95 @@ jobs:
 
 
       # ==================================================
-      # REQUIREMENTS PRIVADO
+      # REQUIREMENTS.TXT PRIVADO
       # ==================================================
 
-      - name: Install custom script requirements
+      - name: Install private requirements
         run: |
           REQUIREMENTS="$O11_DIR/scripts/requirements.txt"
 
           if [ -f "$REQUIREMENTS" ]; then
 
-            echo "Custom requirements.txt found."
-            echo "Installing additional dependencies..."
+            echo "requirements.txt found."
+            echo "Installing private requirements..."
 
-            sudo python3 -m pip install \
+            sudo -H -u vpsuser \
+              python3 -m pip install \
+              --user \
               --break-system-packages \
+              --ignore-installed \
               -r "$REQUIREMENTS"
 
           else
 
             echo "No requirements.txt found."
-            echo "Using common dependencies only."
+            echo "Using preinstalled dependencies."
 
           fi
 
 
       # ==================================================
-      # VERIFICAR DEPENDENCIAS DE O11.PY
+      # PROBAR O11.PY
       # ==================================================
 
-      - name: Verify O11 Python environment
+      - name: Test O11 Python helper
         run: |
-          echo "Python executable:"
-          which python3
-
-          echo
-          echo "Python version:"
-          python3 --version
-
-          echo
-          echo "Testing O11 modules..."
-
           cd "$O11_DIR/scripts"
 
-          python3 - <<'PY'
+          echo "Testing o11.py dependencies..."
+
+          sudo -H -u vpsuser \
+            python3 - <<'PY'
+          import sys
+
+          sys.path.insert(
+              0,
+              "/home/vpsuser/o11-OTT-v2.2b1/scripts"
+          )
+
+          import dns.resolver
           import requests
           import urllib3
-          import dns.resolver
           import requests_toolbelt
+          import o11
 
-          print("requests:", requests.__version__)
-          print("urllib3:", urllib3.__version__)
-          print("dnspython: OK")
-          print("requests_toolbelt: OK")
-          print("O11 Python environment OK")
+          print("")
+          print("========================================")
+          print("O11.PY IMPORT OK")
+          print("========================================")
           PY
 
 
       # ==================================================
-      # COMPROBAR TODOS LOS SCRIPTS
+      # COMPILAR SCRIPTS
       # ==================================================
 
       - name: Compile Python scripts
         run: |
-          echo "Checking Python scripts..."
+          echo "Checking Python syntax..."
 
-          find "$O11_DIR/scripts" \
-            -type f \
-            -name "*.py" \
-            -print0 \
-            | while IFS= read -r -d '' SCRIPT; do
+          while IFS= read -r -d '' SCRIPT; do
 
-                echo "Checking: $SCRIPT"
+            echo "Checking: $SCRIPT"
 
-                python3 \
-                  -m py_compile \
-                  "$SCRIPT"
+            sudo -H -u vpsuser \
+              python3 \
+              -m py_compile \
+              "$SCRIPT"
 
-              done
+          done < <(
+            find "$O11_DIR/scripts" \
+              -type f \
+              -name "*.py" \
+              -print0
+          )
 
           echo
-          echo "All scripts compiled successfully."
+          echo "Python syntax OK."
 
 
       # ==================================================
-      # PERMISOS O11
+      # PERMISOS
       # ==================================================
 
       - name: Set O11 permissions
@@ -539,15 +581,9 @@ jobs:
           ls -lh \
             "$O11_DIR/o11_v22b1-DRMStuff"
 
-          echo
-          echo "File type:"
-
-          file \
-            "$O11_DIR/o11_v22b1-DRMStuff"
-
 
       # ==================================================
-      # TMPFS PARA TODO HLS
+      # TMPFS HLS
       # ==================================================
 
       - name: Prepare HLS RAM filesystem
@@ -577,7 +613,7 @@ jobs:
             tmpfs \
             "$O11_DIR/hls"
 
-          sudo -u vpsuser \
+          sudo -H -u vpsuser \
             mkdir -p \
             "$O11_DIR/hls/live" \
             "$O11_DIR/hls/replay"
@@ -593,15 +629,7 @@ jobs:
             "$O11_DIR/hls/replay"
 
           echo
-          echo "===== HLS DIRECTORY ====="
-
-          ls -ld \
-            "$O11_DIR/hls" \
-            "$O11_DIR/hls/live" \
-            "$O11_DIR/hls/replay"
-
-          echo
-          echo "===== FILESYSTEM ====="
+          echo "===== HLS TMPFS ====="
 
           df -hT \
             "$O11_DIR/hls"
@@ -609,22 +637,25 @@ jobs:
           echo
           echo "===== WRITE TEST ====="
 
-          sudo -u vpsuser \
-            touch "$O11_DIR/hls/.write-test"
+          sudo -H -u vpsuser \
+            touch \
+            "$O11_DIR/hls/.test"
 
-          sudo -u vpsuser \
-            touch "$O11_DIR/hls/live/.write-test"
+          sudo -H -u vpsuser \
+            touch \
+            "$O11_DIR/hls/live/.test"
 
-          sudo -u vpsuser \
-            touch "$O11_DIR/hls/replay/.write-test"
+          sudo -H -u vpsuser \
+            touch \
+            "$O11_DIR/hls/replay/.test"
 
-          sudo -u vpsuser \
+          sudo -H -u vpsuser \
             rm -f \
-            "$O11_DIR/hls/.write-test" \
-            "$O11_DIR/hls/live/.write-test" \
-            "$O11_DIR/hls/replay/.write-test"
+            "$O11_DIR/hls/.test" \
+            "$O11_DIR/hls/live/.test" \
+            "$O11_DIR/hls/replay/.test"
 
-          echo "HLS filesystem is writable by vpsuser."
+          echo "HLS write test OK."
 
 
       # ==================================================
@@ -633,9 +664,12 @@ jobs:
 
       - name: Start O11 OTT Streamer
         run: |
-          sudo -u vpsuser \
+          sudo -H -u vpsuser \
             bash -c "
               cd '$O11_DIR'
+
+              export PATH=\"/home/vpsuser/.local/bin:\$PATH\"
+              export PYTHONUSERBASE=\"/home/vpsuser/.local\"
 
               nohup ./o11_v22b1-DRMStuff \
                 > o11.log \
@@ -661,7 +695,7 @@ jobs:
 
 
       # ==================================================
-      # ESPERAR DASHBOARD
+      # ESPERAR O11
       # ==================================================
 
       - name: Wait for O11 dashboard
@@ -701,9 +735,6 @@ jobs:
 
                 echo
                 echo "ERROR: O11 process stopped."
-
-                echo
-                echo "===== O11 LOG ====="
 
                 cat \
                   "$O11_DIR/o11.log" \
@@ -783,7 +814,7 @@ jobs:
 
 
       # ==================================================
-      # INFORMACIÓN
+      # DATOS DE ACCESO
       # ==================================================
 
       - name: Show access information
@@ -799,11 +830,11 @@ jobs:
           echo
           echo "ssh vpsuser@bore.pub -p $PORT"
           echo
-          echo "O11 local:"
+          echo "O11:"
           echo
           echo "http://127.0.0.1:1234"
           echo
-          echo "O11 directory:"
+          echo "Directory:"
           echo
           echo "$O11_DIR"
           echo
@@ -821,7 +852,7 @@ jobs:
       - name: Final service check
         run: |
           echo
-          echo "===== O11 HTTP ====="
+          echo "===== O11 ====="
 
           curl \
             -I \
@@ -836,7 +867,7 @@ jobs:
             || true
 
           echo
-          echo "===== SSH ====="
+          echo "===== PORT 22 ====="
 
           sudo ss \
             -lntp \
@@ -852,20 +883,15 @@ jobs:
             || true
 
           echo
-          echo "===== BORE ====="
+          echo "===== PYTHON USER PACKAGES ====="
 
-          ps aux \
-            | grep '[b]ore' \
+          sudo -H -u vpsuser \
+            python3 -m pip list \
+            --user \
             || true
 
           echo
-          echo "===== CLOUDFLARE ====="
-
-          docker ps \
-            --filter name=cloudflared
-
-          echo
-          echo "===== HLS TMPFS ====="
+          echo "===== HLS ====="
 
           df -hT \
             "$O11_DIR/hls" \
@@ -935,23 +961,12 @@ jobs:
 
           echo
           echo "============================================"
-          echo "PYTHON"
+          echo "PYTHON PACKAGES"
           echo "============================================"
 
-          python3 --version \
-            || true
-
-          python3 -m pip list \
-            2>/dev/null \
-            || true
-
-          echo
-          echo "============================================"
-          echo "HLS"
-          echo "============================================"
-
-          df -hT \
-            "$O11_DIR/hls" \
+          sudo -H -u vpsuser \
+            python3 -m pip list \
+            --user \
             2>/dev/null \
             || true
 
