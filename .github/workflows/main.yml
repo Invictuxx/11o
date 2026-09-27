@@ -17,7 +17,6 @@ jobs:
   o11:
 
     runs-on: ubuntu-latest
-
     timeout-minutes: 360
 
 
@@ -94,6 +93,16 @@ jobs:
 
       - name: Configure SSH
         run: |
+          echo "Preparing SSH..."
+
+          # OpenSSH requires this directory.
+          sudo install \
+            -d \
+            -m 0755 \
+            -o root \
+            -g root \
+            /run/sshd
+
           sudo mkdir -p \
             /etc/ssh/sshd_config.d
 
@@ -107,16 +116,47 @@ jobs:
 
           sudo ssh-keygen -A
 
-          sudo sshd -t
+          echo
+          echo "Testing SSH configuration..."
 
-          sudo service ssh restart \
-            || sudo systemctl restart ssh
+          sudo /usr/sbin/sshd -t
 
           echo
-          echo "SSH listening:"
-          sudo ss -lntp \
+          echo "Starting SSH..."
+
+          sudo systemctl restart ssh.service \
+            2>/dev/null \
+            || sudo service ssh restart \
+            2>/dev/null \
+            || sudo /usr/sbin/sshd
+
+          sleep 2
+
+          echo
+          echo "===== SSH PROCESS ====="
+
+          ps aux \
+            | grep '[s]shd' \
+            || true
+
+          echo
+          echo "===== SSH PORT ====="
+
+          sudo ss \
+            -lntp \
             | grep ':22' \
             || true
+
+          if ! sudo ss -lnt \
+            | grep -q ':22 '; then
+
+            echo "ERROR: SSH is not listening on port 22."
+
+            exit 1
+          fi
+
+          echo
+          echo "SSH ready."
 
 
       # ==================================================
@@ -143,7 +183,9 @@ jobs:
 
           if [ -z "$BORE_URL" ] \
              || [ "$BORE_URL" = "null" ]; then
+
             echo "ERROR: Bore binary not found."
+
             exit 1
           fi
 
@@ -153,6 +195,9 @@ jobs:
             -fsSL \
             "$BORE_URL" \
             -o /tmp/bore.tar.gz
+
+          rm -rf \
+            /tmp/bore-install
 
           mkdir -p \
             /tmp/bore-install
@@ -167,16 +212,18 @@ jobs:
             /usr/local/bin/bore
 
           echo
+          echo "Bore version:"
+
           bore --version
 
 
       # ==================================================
-      # TÚNEL SSH
+      # INICIAR BORE SSH
       # ==================================================
 
       - name: Start Bore SSH tunnel
         run: |
-          echo "Starting SSH tunnel..."
+          echo "Starting Bore tunnel..."
 
           nohup bore \
             local 22 \
@@ -208,10 +255,14 @@ jobs:
 
           echo
           echo "===== BORE LOG ====="
-          cat /tmp/bore.log || true
+
+          cat /tmp/bore.log \
+            || true
 
           if [ -z "$PORT" ]; then
+
             echo "ERROR: Could not obtain Bore port."
+
             exit 1
           fi
 
@@ -223,21 +274,13 @@ jobs:
           echo "SSH READY"
           echo "============================================"
           echo
-          echo "Host:"
-          echo "bore.pub"
-          echo
-          echo "Port:"
-          echo "$PORT"
-          echo
-          echo "User:"
-          echo "vpsuser"
+          echo "Host: bore.pub"
+          echo "Port: $PORT"
+          echo "User: vpsuser"
           echo
           echo "Command:"
           echo
           echo "ssh vpsuser@bore.pub -p $PORT"
-          echo
-          echo "Password:"
-          echo "VPS_SSH_PASSWORD secret"
           echo
           echo "============================================"
 
@@ -260,6 +303,7 @@ jobs:
 
           echo
           echo "Repository:"
+
           sudo -u vpsuser \
             ls -la \
             "$O11_DIR"
@@ -275,7 +319,9 @@ jobs:
 
         run: |
           if [ -z "$O11_SCRIPTS_B64" ]; then
+
             echo "ERROR: O11_SCRIPTS_B64 is not configured."
+
             exit 1
           fi
 
@@ -293,15 +339,18 @@ jobs:
             -tzf "$WORK_DIR/o11-scripts.tar.gz" \
             >/dev/null
 
-          echo "Extracting archive..."
+          echo "Extracting..."
 
           tar \
             -xzf "$WORK_DIR/o11-scripts.tar.gz" \
             -C "$WORK_DIR"
 
           if [ ! -d "$WORK_DIR/scripts" ]; then
+
             echo "ERROR: scripts directory not found."
+
             rm -rf "$WORK_DIR"
+
             exit 1
           fi
 
@@ -324,12 +373,11 @@ jobs:
             -name "*.py" \
             -exec chmod 700 {} \;
 
-          rm -rf "$WORK_DIR"
+          rm -rf \
+            "$WORK_DIR"
 
           echo
-          echo "============================================"
-          echo "PRIVATE SCRIPTS INSTALLED"
-          echo "============================================"
+          echo "===== PRIVATE SCRIPTS ====="
 
           sudo -u vpsuser \
             find \
@@ -355,17 +403,19 @@ jobs:
 
           echo
           echo "Binary:"
+
           ls -lh \
             "$O11_DIR/o11_v22b1-DRMStuff"
 
           echo
           echo "File type:"
+
           file \
             "$O11_DIR/o11_v22b1-DRMStuff"
 
 
       # ==================================================
-      # PREPARAR TMPFS PARA HLS
+      # RAMFS / TMPFS PARA HLS
       # ==================================================
 
       - name: Prepare HLS RAM filesystem
@@ -385,10 +435,12 @@ jobs:
               -o size=2G,uid=$(id -u vpsuser),gid=$(id -g vpsuser),mode=0755 \
               tmpfs \
               "$O11_DIR/hls/live"
+
           fi
 
           echo
-          echo "HLS filesystem:"
+          echo "===== HLS TMPFS ====="
+
           df -hT \
             "$O11_DIR/hls/live"
 
@@ -412,6 +464,7 @@ jobs:
 
           echo
           echo "O11 PID:"
+
           cat \
             "$O11_DIR/o11.pid"
 
@@ -419,13 +472,14 @@ jobs:
 
           echo
           echo "===== INITIAL O11 LOG ====="
+
           cat \
             "$O11_DIR/o11.log" \
             || true
 
 
       # ==================================================
-      # ESPERAR O11
+      # ESPERAR DASHBOARD
       # ==================================================
 
       - name: Wait for O11 dashboard
@@ -451,8 +505,10 @@ jobs:
             echo "Attempt $i/60..."
 
             if [ -f "$O11_DIR/o11.log" ]; then
+
               tail -20 \
                 "$O11_DIR/o11.log"
+
             fi
 
             sleep 5
@@ -486,7 +542,7 @@ jobs:
 
 
       # ==================================================
-      # CLOUDFLARE TUNNEL
+      # CLOUDFLARE
       # ==================================================
 
       - name: Start Cloudflare Tunnel
@@ -495,7 +551,9 @@ jobs:
 
         run: |
           if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+
             echo "ERROR: CLOUDFLARE_TUNNEL_TOKEN is not configured."
+
             exit 1
           fi
 
@@ -538,7 +596,7 @@ jobs:
 
 
       # ==================================================
-      # INFORMACIÓN DE ACCESO
+      # DATOS DE ACCESO
       # ==================================================
 
       - name: Show access information
@@ -550,17 +608,11 @@ jobs:
           echo "O11 SERVER READY"
           echo "============================================"
           echo
-          echo "SSH command:"
+          echo "SSH:"
           echo
           echo "ssh vpsuser@bore.pub -p $PORT"
           echo
-          echo "SSH user:"
-          echo "vpsuser"
-          echo
-          echo "SSH password:"
-          echo "Value configured in VPS_SSH_PASSWORD"
-          echo
-          echo "O11 local dashboard:"
+          echo "O11 local:"
           echo
           echo "http://127.0.0.1:1234"
           echo
@@ -568,7 +620,7 @@ jobs:
           echo
           echo "$O11_DIR"
           echo
-          echo "Private scripts:"
+          echo "Scripts:"
           echo
           echo "$O11_DIR/scripts"
           echo
@@ -586,7 +638,7 @@ jobs:
       - name: Final service check
         run: |
           echo
-          echo "===== O11 HTTP ====="
+          echo "===== O11 ====="
 
           curl \
             -I \
@@ -601,19 +653,26 @@ jobs:
             || true
 
           echo
+          echo "===== SSH ====="
+
+          ps aux \
+            | grep '[s]shd' \
+            || true
+
+          echo
+          echo "===== PORT 22 ====="
+
+          sudo ss \
+            -lntp \
+            | grep ':22' \
+            || true
+
+          echo
           echo "===== PORT 1234 ====="
 
           sudo ss \
             -lntp \
             | grep ':1234' \
-            || true
-
-          echo
-          echo "===== SSH PORT ====="
-
-          sudo ss \
-            -lntp \
-            | grep ':22' \
             || true
 
           echo
@@ -630,7 +689,7 @@ jobs:
             --filter name=cloudflared
 
           echo
-          echo "===== RAMFS ====="
+          echo "===== TMPFS ====="
 
           df -hT \
             "$O11_DIR/hls/live" \
@@ -654,18 +713,7 @@ jobs:
           echo
           echo "ssh vpsuser@bore.pub -p $PORT"
           echo
-          echo "O11:"
-          echo
-          echo "$O11_DIR"
-          echo
-          echo "Scripts:"
-          echo
-          echo "$O11_DIR/scripts"
-          echo
           echo "============================================"
-
-          # 5 horas 45 minutos.
-          # Deja margen al job para instalación y cleanup.
 
           sleep 20700
 
@@ -716,7 +764,7 @@ jobs:
 
           ps aux \
             | grep -E \
-              '[o]11|[c]loudflared|[b]ore' \
+              '[o]11|[c]loudflared|[b]ore|[s]shd' \
             || true
 
 
@@ -738,19 +786,23 @@ jobs:
           echo "Stopping Bore..."
 
           if [ -f /tmp/bore.pid ]; then
+
             sudo kill \
               "$(cat /tmp/bore.pid)" \
               2>/dev/null \
               || true
+
           fi
 
           echo "Stopping O11..."
 
           if [ -f "$O11_DIR/o11.pid" ]; then
+
             sudo kill \
               "$(cat "$O11_DIR/o11.pid")" \
               2>/dev/null \
               || true
+
           fi
 
           sleep 2
@@ -764,6 +816,7 @@ jobs:
             sudo umount \
               "$O11_DIR/hls/live" \
               || true
+
           fi
 
           echo "Cleanup complete."
