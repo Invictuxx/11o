@@ -95,7 +95,6 @@ jobs:
         run: |
           echo "Preparing SSH..."
 
-          # OpenSSH requires this directory.
           sudo install \
             -d \
             -m 0755 \
@@ -116,13 +115,7 @@ jobs:
 
           sudo ssh-keygen -A
 
-          echo
-          echo "Testing SSH configuration..."
-
           sudo /usr/sbin/sshd -t
-
-          echo
-          echo "Starting SSH..."
 
           sudo systemctl restart ssh.service \
             2>/dev/null \
@@ -155,9 +148,6 @@ jobs:
             exit 1
           fi
 
-          echo
-          echo "SSH ready."
-
 
       # ==================================================
       # INSTALAR BORE
@@ -189,8 +179,6 @@ jobs:
             exit 1
           fi
 
-          echo "Downloading Bore..."
-
           curl \
             -fsSL \
             "$BORE_URL" \
@@ -211,9 +199,6 @@ jobs:
             /tmp/bore-install/bore \
             /usr/local/bin/bore
 
-          echo
-          echo "Bore version:"
-
           bore --version
 
 
@@ -223,8 +208,6 @@ jobs:
 
       - name: Start Bore SSH tunnel
         run: |
-          echo "Starting Bore tunnel..."
-
           nohup bore \
             local 22 \
             --to bore.pub \
@@ -256,8 +239,7 @@ jobs:
           echo
           echo "===== BORE LOG ====="
 
-          cat /tmp/bore.log \
-            || true
+          cat /tmp/bore.log || true
 
           if [ -z "$PORT" ]; then
 
@@ -273,12 +255,6 @@ jobs:
           echo "============================================"
           echo "SSH READY"
           echo "============================================"
-          echo
-          echo "Host: bore.pub"
-          echo "Port: $PORT"
-          echo "User: vpsuser"
-          echo
-          echo "Command:"
           echo
           echo "ssh vpsuser@bore.pub -p $PORT"
           echo
@@ -333,13 +309,9 @@ jobs:
             | base64 --decode \
             > "$WORK_DIR/o11-scripts.tar.gz"
 
-          echo "Testing archive..."
-
           tar \
             -tzf "$WORK_DIR/o11-scripts.tar.gz" \
             >/dev/null
-
-          echo "Extracting..."
 
           tar \
             -xzf "$WORK_DIR/o11-scripts.tar.gz" \
@@ -415,34 +387,85 @@ jobs:
 
 
       # ==================================================
-      # RAMFS / TMPFS PARA HLS
+      # TMPFS PARA TODO HLS
       # ==================================================
 
       - name: Prepare HLS RAM filesystem
         run: |
+          echo "Preparing HLS tmpfs..."
+
+          UID_VPS="$(id -u vpsuser)"
+          GID_VPS="$(id -g vpsuser)"
+
           sudo mkdir -p \
-            "$O11_DIR/hls/live"
+            "$O11_DIR/hls"
 
           sudo chown \
             vpsuser:vpsuser \
-            "$O11_DIR/hls/live"
+            "$O11_DIR/hls"
 
-          if ! mountpoint -q \
-            "$O11_DIR/hls/live"; then
-
-            sudo mount \
-              -t tmpfs \
-              -o size=2G,uid=$(id -u vpsuser),gid=$(id -g vpsuser),mode=0755 \
-              tmpfs \
-              "$O11_DIR/hls/live"
-
+          # Por seguridad, desmontar un montaje anterior.
+          if mountpoint -q "$O11_DIR/hls"; then
+            sudo umount "$O11_DIR/hls"
           fi
 
+          # Montar TODO hls/ en RAM.
+          sudo mount \
+            -t tmpfs \
+            -o "size=2G,uid=${UID_VPS},gid=${GID_VPS},mode=0755" \
+            tmpfs \
+            "$O11_DIR/hls"
+
+          # Crear todas las carpetas que O11 necesita.
+          sudo -u vpsuser \
+            mkdir -p \
+            "$O11_DIR/hls/live" \
+            "$O11_DIR/hls/replay"
+
+          # Asegurar permisos.
+          sudo chown \
+            -R vpsuser:vpsuser \
+            "$O11_DIR/hls"
+
+          sudo chmod \
+            755 \
+            "$O11_DIR/hls" \
+            "$O11_DIR/hls/live" \
+            "$O11_DIR/hls/replay"
+
           echo
-          echo "===== HLS TMPFS ====="
+          echo "===== HLS DIRECTORY ====="
+
+          ls -ld \
+            "$O11_DIR/hls" \
+            "$O11_DIR/hls/live" \
+            "$O11_DIR/hls/replay"
+
+          echo
+          echo "===== FILESYSTEM ====="
 
           df -hT \
-            "$O11_DIR/hls/live"
+            "$O11_DIR/hls"
+
+          echo
+          echo "===== WRITE TEST ====="
+
+          sudo -u vpsuser \
+            touch "$O11_DIR/hls/.write-test"
+
+          sudo -u vpsuser \
+            touch "$O11_DIR/hls/live/.write-test"
+
+          sudo -u vpsuser \
+            touch "$O11_DIR/hls/replay/.write-test"
+
+          sudo -u vpsuser \
+            rm -f \
+            "$O11_DIR/hls/.write-test" \
+            "$O11_DIR/hls/live/.write-test" \
+            "$O11_DIR/hls/replay/.write-test"
+
+          echo "HLS filesystem is writable by vpsuser."
 
 
       # ==================================================
@@ -505,10 +528,43 @@ jobs:
             echo "Attempt $i/60..."
 
             if [ -f "$O11_DIR/o11.log" ]; then
-
               tail -20 \
                 "$O11_DIR/o11.log"
+            fi
 
+            # Si el proceso murió, no esperar 5 minutos.
+            if [ -f "$O11_DIR/o11.pid" ]; then
+
+              PID="$(cat "$O11_DIR/o11.pid")"
+
+              if ! kill -0 "$PID" 2>/dev/null; then
+
+                echo
+                echo "ERROR: O11 process stopped."
+
+                echo
+                echo "===== O11 LOG ====="
+
+                cat "$O11_DIR/o11.log" || true
+
+                echo
+                echo "===== HLS PERMISSIONS ====="
+
+                ls -ld \
+                  "$O11_DIR/hls" \
+                  "$O11_DIR/hls/live" \
+                  "$O11_DIR/hls/replay" \
+                  || true
+
+                echo
+                echo "===== HLS FILESYSTEM ====="
+
+                df -hT \
+                  "$O11_DIR/hls" \
+                  || true
+
+                exit 1
+              fi
             fi
 
             sleep 5
@@ -517,25 +573,8 @@ jobs:
           echo
           echo "O11 failed to start."
 
-          echo
-          echo "===== O11 LOG ====="
-
           cat \
             "$O11_DIR/o11.log" \
-            || true
-
-          echo
-          echo "===== PORTS ====="
-
-          sudo ss \
-            -lntp \
-            || true
-
-          echo
-          echo "===== PROCESS ====="
-
-          ps aux \
-            | grep '[o]11' \
             || true
 
           exit 1
@@ -596,7 +635,7 @@ jobs:
 
 
       # ==================================================
-      # DATOS DE ACCESO
+      # INFORMACIÓN
       # ==================================================
 
       - name: Show access information
@@ -624,10 +663,6 @@ jobs:
           echo
           echo "$O11_DIR/scripts"
           echo
-          echo "Cloudflare:"
-          echo
-          echo "RUNNING"
-          echo
           echo "============================================"
 
 
@@ -638,7 +673,7 @@ jobs:
       - name: Final service check
         run: |
           echo
-          echo "===== O11 ====="
+          echo "===== O11 HTTP ====="
 
           curl \
             -I \
@@ -655,13 +690,6 @@ jobs:
           echo
           echo "===== SSH ====="
 
-          ps aux \
-            | grep '[s]shd' \
-            || true
-
-          echo
-          echo "===== PORT 22 ====="
-
           sudo ss \
             -lntp \
             | grep ':22' \
@@ -676,23 +704,19 @@ jobs:
             || true
 
           echo
-          echo "===== BORE ====="
+          echo "===== HLS TMPFS ====="
 
-          ps aux \
-            | grep '[b]ore' \
+          df -hT \
+            "$O11_DIR/hls" \
             || true
 
           echo
-          echo "===== CLOUDFLARED ====="
+          echo "===== HLS PERMISSIONS ====="
 
-          docker ps \
-            --filter name=cloudflared
-
-          echo
-          echo "===== TMPFS ====="
-
-          df -hT \
+          ls -ld \
+            "$O11_DIR/hls" \
             "$O11_DIR/hls/live" \
+            "$O11_DIR/hls/replay" \
             || true
 
 
@@ -759,12 +783,17 @@ jobs:
 
           echo
           echo "============================================"
-          echo "PROCESSES"
+          echo "HLS"
           echo "============================================"
 
-          ps aux \
-            | grep -E \
-              '[o]11|[c]loudflared|[b]ore|[s]shd' \
+          df -hT \
+            "$O11_DIR/hls" \
+            2>/dev/null \
+            || true
+
+          ls -la \
+            "$O11_DIR/hls" \
+            2>/dev/null \
             || true
 
 
@@ -809,12 +838,10 @@ jobs:
 
           echo "Unmounting HLS tmpfs..."
 
-          if mountpoint -q \
-            "$O11_DIR/hls/live" \
-            2>/dev/null; then
+          if mountpoint -q "$O11_DIR/hls"; then
 
             sudo umount \
-              "$O11_DIR/hls/live" \
+              "$O11_DIR/hls" \
               || true
 
           fi
